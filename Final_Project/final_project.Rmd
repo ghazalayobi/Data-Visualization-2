@@ -1,0 +1,460 @@
+---
+title: "Final Project : Tidy-Tuesday - Netflix titles"
+author: "Ghazal Ayobi"
+date: "2/12/2022"
+output:
+  rmarkdown::html_document:
+    theme: lumen
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+# Introduction
+
+The aim of this project is to utilize Rstudio for data visualization purposes. Netflix titles from Tidy Tuesday is used for this project, which can be found [here](https://github.com/rfordatascience/tidytuesday/blob/master/data/2021/2021-04-20/readme.md). In this project I will be exploring the Movies and TV shows in Netflix.
+
+
+## Setting up the Environement
+### Loading Libraries
+
+```{r message=FALSE, warning=FALSE}
+
+# loading libraries
+library(data.table)
+library(tidytuesdayR)
+library(tidyverse)
+library(scales)
+library(kableExtra)
+library(gganimate)
+library(tidytext)
+library(viridis)
+library(plotly)
+library(lubridate)
+library(ggplot2)
+library(hrbrthemes)
+library(dplyr)
+library(modelsummary)
+library(readr)
+library(igraph)
+library(ggraph)
+library(snakecase)
+library(tidylo)
+library(widyr)
+library(tidygraph)
+library(ggraph)
+library(tm)
+library(factoextra)
+library(rpubs)
+```
+
+### Loading Data
+The data is called Netflix titles, the source of the data is Tidy Tuesday. 
+```{r message=FALSE, warning=FALSE}
+# Loading the data
+
+netflix <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-04-20/netflix_titles.csv')
+
+```
+
+
+```{r message=FALSE, warning=FALSE}
+count_rows <- count(netflix)
+count_cols <- ncol(netflix)
+```
+
+This data set contains ` r count_rows` observations and ` r count_cols` columns. The main columns are content type, director, cast, country, date added to Netflix, release year, rating, listed in and description. 
+
+### Data Cleaning
+
+In order to clean the data, I transformed the _date_added_ column to the month, day and year format and created another column for the year in which the content was added. Furthermore, duration columns has information about duration of the Movie or TV show which is measured in minutes and seasons consequentially. I split the column into duration and duration unit. The reason is movies and TV shows are measured in different units. As a result, I transformed the duration column to the numeric. Moreover I added a new column for content details which combination of type of the content and the genres the movie is listed in. 
+
+```{r message=FALSE, warning=FALSE}
+
+# Transforming to data table
+netflix <- as.data.table(netflix)
+
+# Formatting the date added column
+netflix <- netflix[, date_added := mdy(date_added)]
+
+# Adding a new column for the year the content is added
+netflix <- netflix[, year_added := year(date_added)]
+
+# Adding new columns for of duration duration unit, year added.
+netflix <- netflix[, c('duration','duration_unit') := do.call(Map, c(f = c, strsplit(duration, ' '))) ]
+
+# changing the duration column to numeric
+netflix$duration <- as.numeric(netflix$duration)
+
+# Creating a new column for the content details
+netflix$content_details <- paste0(netflix$type, ", ", netflix$listed_in)
+
+
+netflix[type == "Movie", decade := 10 * (release_year %/% 10) ]
+netflix$decade <- as.numeric(netflix$decade)
+
+
+```
+
+
+### Creating New Table
+In the below section, I created another data table which contains the country, year and number of contents added to the Netflix. Moreover, I also created a function to remove null values. The Netflix data set contians infromation about different ratings, I created a vector of of MPA, Motion, Picture and Animation, ratings.
+
+```{r message=FALSE, warning=FALSE}
+
+# creating new data table of countries to be used for further mapping
+countries <- netflix[, .(count = .N), by = .(country, year_added)]
+
+# extracting each country and the year their content added to the Netflix
+countries <-  countries %>% 
+  ungroup()%>%
+  separate_rows(country,sep = ",")%>%
+  mutate(
+    country=str_trim(country)
+  )%>%
+  group_by(year_added,country)%>%
+  summarize(
+    count=n()
+  )%>%
+  ungroup()%>%
+  filter(country!='NA',country!="" )%>%
+  arrange(year_added,desc(count))
+
+
+# Create function to drop null values
+row.has.na <- apply(countries, 1, function(x){any(is.na(x))})
+sum(row.has.na)
+countries <- countries[!row.has.na,]
+
+# adding the country codes 
+countries <- countries %>% 
+  mutate(
+    iso2=countrycode::countryname(country,destination = "iso2c"),
+    iso3=countrycode::countryname(country,destination = "iso3c"))
+
+# renaming the column year_added
+colnames(countries)[colnames(countries) == "year_added"] <- "year"
+
+
+countries <- as.data.table(countries)
+
+
+# Defining MPA rating, Motion Picture and animation film rating system
+MPA_ratings <- c("G", "PG", "PG-13", "R", "NC-17")  
+```
+
+I created another table to split all the words in the description column and created another data set with all the world information in the the new column called _word_. 
+
+```{r message=FALSE, warning=FALSE}
+# creating world correlations
+
+words <- netflix %>%
+  unnest_tokens(word, description) %>%
+  anti_join(stop_words, by = "word")
+
+```
+
+## Descriptive Summary
+
+The Netflix Content Type summary indicates that there are 69.05% of observations are Movies compared to 30.95% TV Shows. Moreover, Rating categories shows a wide range of movie and TV Show rating in the Netflix data set. 
+
+```{r message=FALSE, warning=FALSE}
+# data summary
+# Data summary for type
+datasummary((` Type` = type) ~ N + Percent(), data = netflix, title = "Netflix Contnet Type")
+
+# Data summary for rating 
+datasummary((`Rating` = rating )~ N + Percent(), data = netflix, title = "Rating Categories")
+
+```
+
+The Duration summary table Movies duration is measured in minutes and TV Shows duration is measured in number of seasons. It can be seen that average duration for a movie is 99 minutes, and the average length of a TV Show is around two seasons. 
+
+```{r message=FALSE, warning=FALSE}
+
+# data summary for Duration and type
+datasummary((`Type` = type)*(`Duration` = duration) ~ Min + Max + Mean + Median + N , data = netflix, title = "Duration Summary")
+
+# Data summary for type and yeat
+datasummary((`Type` = type)*(`Year added` = year_added) ~ Min + Max + N , data = netflix, title = "Rating Categories")
+```
+
+
+
+## Distributions
+Netflix content distribution shows the existence of more movies than TV shows. 
+
+
+
+
+```{r message=FALSE, warning=FALSE}
+
+# content distribution
+ggplot(data=netflix, aes(x=year_added, fill = type)) +
+  geom_bar() +
+  xlab("Year") +
+  ylab("Count")+
+  labs(title = "Netflix Content Distribution", fill = "Type") +
+  scale_fill_viridis(discrete = T, alpha = 0.9) + 
+  theme(legend.position = "top", 
+        panel.border = element_blank(), axis.text=element_text(size=8), 
+        plot.title = element_text(size = 12L, face = "bold", hjust = 0.5), 
+        panel.background = element_rect(fill = NA) )
+
+
+  
+```
+
+
+
+Movies duration is measured in minutes, the below distribution has a normal distribution, it seems that the average duration of a movies is around 100 minutes with is close to the duration mean from the summary table
+
+
+
+```{r message=FALSE, warning=FALSE}
+
+# movies duration distribution
+ggplot(data=netflix[netflix$type == "Movie", ], aes(x=duration)) +
+  geom_bar(fill = "#440154", alpha = 0.8) +
+  xlab("Duration (in minutes) ") +
+  ylab("Count")+
+  labs(title = "Netflix Movies Duration Distribution") +
+    theme(legend.position = "top", 
+        panel.border = element_blank(), axis.text=element_text(size=8), 
+        plot.title = element_text(size = 12L, face = "bold", hjust = 0.5), 
+        panel.background = element_rect(fill = NA) )
+```
+
+
+
+TV shows distribution shows that many shows have one season, moreover the distribution has a right long tail and it is skewed. 
+
+
+
+```{r message=FALSE, warning=FALSE}
+# tv shows seasons distribution 
+
+ggplot(data=netflix[netflix$type == "TV Show", ], aes(x=duration)) +
+  geom_bar(fill = "#440154", alpha = 0.8) +
+  xlab("Number of Seasons") +
+  ylab("Count")+
+  labs(title = "Netflix TV Shows Seasons Distribution") +
+    theme(legend.position = "top", 
+        panel.border = element_blank(), axis.text=element_text(size=8), 
+        plot.title = element_text(size = 12L, face = "bold", hjust = 0.5), panel.background = element_rect(fill = NA) )
+```
+
+
+
+The below graphs shows that United States is the largest contributor to the Netflix content.
+
+
+```{r message=FALSE, warning=FALSE}
+
+# top countries content providers graphs
+ggplot(countries[ , .(country, count)][, .(total = sum(count)), by = country ][order(-total)][head(1:10)], aes(x = country, y = total)) + 
+  geom_col(fill = "#440154", alpha = 0.8) + 
+  xlab("Country") +
+  ylab("Number of contents") +
+  labs(title = "Number of Netflix Content per Country") + 
+  theme(legend.position = "top", 
+        panel.border = element_blank(), axis.text=element_text(size=8), 
+        plot.title = element_text(size = 12L, face = "bold", hjust = 0.5), panel.background = element_rect(fill = NA) )
+
+```
+
+
+
+In addition to the data summary, _description_ column contains a large amount of information about the details of a content, and it provides a great amount of information about the movie or the TV show. It is interesting to see how the words are related to each other such as _mother, daughter, son_ and others
+
+
+
+```{r message=FALSE, warning=FALSE}
+
+# creating words relationship
+words %>%
+  distinct(type, title, word) %>%
+  add_count(word, name = "word_total") %>%
+  filter(word_total >= 40) %>%
+  pairwise_cor(word, title, sort = TRUE) %>%
+  filter(correlation >= .1) %>%
+  igraph::graph_from_data_frame() %>%
+  ggraph(layout = "fr") +
+  geom_edge_link(aes(alpha = correlation)) +
+  geom_node_point() +
+  geom_node_text(aes(label = name),
+                 repel = TRUE) +
+  theme(legend.position = "none", panel.background = element_rect(fill = NA))
+
+# the code source is provided in the reference
+```
+
+
+# Mian Tasks
+
+In the below section, I will focusing on the main questions of this project.
+
+## 1- How the production of Movies and TV shows have changed across years?
+
+The below curve clearly indicate that there has been very few movies and TV shows released before 2000. As the animated line graphs show that many movies and TV shows were released after 2000. Regarding the decline of the lines, as the data latest date added of the content is January 2021, thus, there has not been many movies in the first month of 2021.
+
+```{r message=FALSE, warning=FALSE}
+#How the production of Movies and TV shows have changed across years?
+netflix <- as.data.table(netflix)
+
+ggplot(netflix[, .(count = .N), by = .(type, release_year)], aes(x=release_year, y=count, group=type, color=type)) +
+  geom_line() +
+  geom_point() +
+  scale_color_viridis(discrete = TRUE) +
+  ggtitle("Netflix Movies and TV shows per year") +
+  ylab("Number of Movies / TV shows") +
+  xlab("Release Year") +
+  labs(color = "Type", group = "Type") +
+  theme(legend.position = "top", panel.background = element_rect(fill = NA),
+        panel.border = element_blank(), axis.text=element_text(size=8), 
+        plot.title = element_text(size = 12L, face = "bold", hjust = 0.5) ) +
+  transition_reveal(release_year) +
+  enter_grow() +
+  enter_fade() +
+  ease_aes("back-in")
+
+```
+
+
+## 2- How the average movie duration has changed across the decades?
+
+It can be seen from the below plot that the before 1950s movies were shorter. However, during the 1960s to 2000 the duration of movies were longer, as it can be seen, that movies duration is graduation declining on average.
+
+
+```{r message=FALSE, warning=FALSE}
+#How the average movie duration has changed across the decades?
+
+ggplot(netflix[type == "Movie"], aes(decade, duration, group = decade, fill = decade)) +
+  xlab("Decade") +
+  ylab("Duration") +
+  labs(fill = "Decade", group = "Decade", title = "Movies Duration across Decades") +
+  geom_boxplot() +
+  theme(legend.position = "top", panel.background = element_rect(fill = NA),
+        panel.border = element_blank(), axis.text=element_text(size=8), 
+        plot.title = element_text(size = 12L, face = "bold", hjust = 0.5) ) +
+  scale_fill_viridis() +
+  transition_reveal(decade)
+
+```
+
+
+
+## 3- How movies duration changes basend on the target audience?
+The movies are rated as following
+- G, all people can see it, 
+- PG, parents must see it with a child or it evaluate it, 
+- PG-13, parents must evaluate it, if child is under 13, 
+- R, parents must evaluate if child is under 18, 
+- NC-17, audience must be over 17
+
+The below violin graph shows that the movies which are rate as G, or PG-13 tend to be shorter, thus, we can say that movies which children can watch are shorter on average. 
+
+
+```{r message=FALSE, warning=FALSE}
+# 3- How movies duration changes basend on the target audience?
+ggplot(netflix[type == "Movie", ][rating %in% c("G", "PG", "PG-13", "R", "NC-17"), 
+                           rating2 := factor(rating, levels = rev(c("G", "PG", "PG-13", "R", "NC-17")))][!is.na(rating),][!is.na(rating2)], aes(x = rating2, y = duration, fill = rating2)) +
+  geom_violin() +
+  geom_hline(yintercept = 99, linetype = 2) +
+  coord_flip() +
+  scale_fill_viridis_d() +
+  theme(legend.position = "top", panel.background = element_rect(fill = NA),
+        panel.border = element_blank(), axis.text=element_text(size=8), 
+        plot.title = element_text(size = 12L, face = "bold", hjust = 0.5) ) +
+  labs(x = "Film rating", y = "Film duration (minutes)",
+       title = "Movies Duration Dased on Trget Audience", fill = "Rating")
+
+```
+
+## 4- How are the genres clustered? 
+The below figure shows the clusters of genres. It can be seen from the clusters that movies are common for family and children. Moreover, the largest genre cluster contains thrillers, crimes, horror, reality and many other genres. 
+
+```{r message=FALSE, warning=FALSE}
+
+library(tm)
+# building corpus
+corpus <- Corpus(VectorSource(netflix$listed_in))
+
+# create term document matrix
+tdm <- TermDocumentMatrix(corpus, 
+                          control = list(minWordLength=c(1,Inf)))
+# convert to matrix
+m <- as.matrix(tdm)
+
+# Hierarchical word clustering using dendrogram
+distance <- dist(scale(m))
+hc <- hclust(distance, method = "ward.D")
+
+# Circular
+Circ = fviz_dend(hc, cex = 0.7, lwd = 0.5, k = 5,
+                 rect = TRUE,
+                 k_colors = c("#440154", "#3b528b", "#21918c", "#5ec962", "#fde725"),
+                 rect_border = c("#440154", "#3b528b", "#21918c", "#5ec962", "#fde725"),
+                 rect_fill = TRUE,
+                 type = "circular",
+                 ylab = "")
+Circ
+```
+
+
+## 5- When contries content were added to the Netflix? 
+
+The below map shows that based on the available data in 2008, United States was the only content contributor to the Netflix, As the time passes other countries across the globe joined Netflix.
+
+
+```{r message=FALSE, warning=FALSE}
+# changing  to numeric
+countries$count <- as.numeric(countries$count)
+
+# creating hover 
+countries <- countries %>% mutate(hover = paste0(country, "\n", year))
+
+# removing nulls
+countries <- drop_na(countries)
+# creating type of map
+g <- list(
+  projection = list(
+    type = 'natural earth'
+  ),
+  showland = TRUE,
+  landcolor = toRGB("#F9F9F9")
+)
+
+# ploting the map
+plot_geo(countries, 
+         locationmode = "ISO-3",
+         frame = ~year) %>% 
+  add_trace(locations = ~iso3,
+            z = ~count,
+            zmin = 1,
+            zmax = max(countries$count),
+            color = ~count,
+            text = ~hover,
+            hoverinfo = "text") %>% 
+  layout(geo = g,
+         title = "Countries added to Netflix\n2008-2021")
+
+```
+
+
+
+# Conclusion
+
+Based on the visualization and text analysis of the Netflix data, it can be seen that movies have a larger part in the Netflix content. Furthermore, the data summaries and visualization indicated that Netflix started contributing it Content since 2008 and United states was the only country back in time. Moreover, Netflix movies and TV shows are rated and these ratings are standardized for different audience. From duration and ranting categories analysis it can be seen that movies which children can watch, on average are shorter. 
+
+# Appendix
+
+## References
+[David Robinson screencast](https://www.youtube.com/watch?v=3PecUbnuYC4)
+[Films with MPA ratings on Netflix](https://tidytuesday.netlify.app/posts/2021-04-21-netflix-titles/)
+
+
+
